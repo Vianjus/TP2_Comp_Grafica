@@ -7,6 +7,7 @@
 #include <filesystem>  
 #include "glad/glad.h"
 #include "GLFW/glfw3.h"
+#include "glm.hpp"
 #include "VTKLoader.h"
 #include "TreeRenderer.h"
 
@@ -18,25 +19,30 @@ namespace fs = std::filesystem;
 // =============================================
 
 struct CameraState {
-    float translation[2] = {0.0f, 0.0f};
-    float scale = 1.0f;
-    float rotation = 0.0f;
+    vec3 position = vec3(0.0f, 0.0f, 2.5f);
+    vec3 target = vec3(0.0f, 0.0f, 0.0f);
+    vec3 up = vec3(0.0f, 1.0f, 0.0f);
     
-    float targetTranslation[2] = {0.0f, 0.0f};
-    float targetScale = 1.0f;
-    float targetRotation = 0.0f;
+    float pitch = -45.0f;  // Rotação em torno do eixo X (cima/baixo) - visualizando de baixo para cima
+    float yaw = 0.0f;    // Rotação em torno do eixo Y (esquerda/direita)
+    float distance = 2.5f;
+    
+    vec3 targetPosition = position;
+    float targetPitch = pitch;
+    float targetYaw = yaw;
+    float targetDistance = distance;
 };
 
 struct AppConfig {
     float backgroundColor[3] = {0.05f, 0.05f, 0.08f};
-    float moveSpeed = 0.0005f;
-    float rotationSpeed = 0.0005f;
-    float zoomSpeed = 0.4f;
-    float smoothFactor = 3.0f;
-    float dragSensitivity = 0.0013f;
-    float minScale = 0.1f;
-    float maxScale = 5.0f;
-    float translationLimit = 2.0f;
+    float moveSpeed = 0.05f;
+    float rotationSpeed = 0.02f;
+    float zoomSpeed = 0.5f;
+    float smoothFactor = 5.0f;
+    float dragSensitivity = 0.01f;
+    float minDistance = 0.5f;
+    float maxDistance = 10.0f;
+    float fov = 45.0f;
 };
 
 struct MouseState {
@@ -65,12 +71,9 @@ bool gradientMode = false;
 bool thicknessMode = false;
 bool descendantsColorMode = false;
 
-float transformMatrix[16] = {
-    1.0f, 0.0f, 0.0f, 0.0f,
-    0.0f, 1.0f, 0.0f, 0.0f, 
-    0.0f, 0.0f, 1.0f, 0.0f,
-    0.0f, 0.0f, 0.0f, 1.0f
-};
+// Matrizes locais
+int windowWidth = 1200;
+int windowHeight = 800;
 
 chrono::steady_clock::time_point lastTime;
 
@@ -79,8 +82,8 @@ chrono::steady_clock::time_point lastTime;
 // =============================================
 
 void loadTreeFiles();
-void updateTransformMatrix();
-void updateSmoothTransform(float deltaTime);
+void updateCameraMatrices();
+void updateSmoothCamera(float deltaTime);
 void resetCamera();
 void printControls();
 void printCurrentTreeInfo();
@@ -105,12 +108,12 @@ void loadTreeFiles() {
     
     cout << "Procurando arquivos VTK..." << endl;
     
-    vector<string> folders = {"data/Nterm_064", "data/Nterm_128", "data/Nterm_256"};
+    vector<string> folders = {"data/Nterm_128", "data/Nterm_256", "data/Nterm_512"};
     int totalFiles = 0;
     
     for (const auto& folder : folders) {
         if (!fs::exists(folder) || !fs::is_directory(folder)) {
-            cout << "  [!] Pasta não encontrada: " << folder << endl;
+            cout << "  [!] Pasta nao encontrada: " << folder << endl;
             continue;
         }
         
@@ -129,7 +132,7 @@ void loadTreeFiles() {
             string friendlyName = folder + "/" + filename;
             
             // Remove prefixos para nome mais legível
-            size_t pos = friendlyName.find("tree2D_");
+            size_t pos = friendlyName.find("tree3D_");
             if (pos != string::npos) {
                 friendlyName = friendlyName.substr(pos + 7);
             }
@@ -148,13 +151,13 @@ void loadTreeFiles() {
     
     if (treeFiles.empty()) {
         cout << "Nenhum arquivo VTK encontrado!" << endl;
-        cout << "Criando lista de arquivos padrão..." << endl;
+        cout << "Criando lista de arquivos padrao..." << endl;
         
         treeFiles = {
-            "data/Nterm_064/tree2D_Nterm0064_step0064.vtk",
-            "data/Nterm_064/tree2D_Nterm0064_step0008.vtk", 
-            "data/Nterm_128/tree2D_Nterm0128_step0128.vtk",
-            "data/Nterm_256/tree2D_Nterm0256_step0256.vtk"
+            "data/Nterm_128/tree3D_Nterm0128_step0016.vtk",
+            "data/Nterm_128/tree3D_Nterm0128_step0128.vtk", 
+            "data/Nterm_256/tree3D_Nterm0256_step0256.vtk",
+            "data/Nterm_512/tree3D_Nterm0512_step0512.vtk"
         };
         
         for (const auto& file : treeFiles) {
@@ -168,60 +171,53 @@ void loadTreeFiles() {
 void printCurrentTreeInfo() {
     if (currentTreeIndex >= treeFileNames.size()) return;
     
-    cout << "\n=== Árvore Atual ===" << endl;
+    cout << "\n=== Arvore Atual ===" << endl;
     cout << "Arquivo: " << treeFileNames[currentTreeIndex] << endl;
-    cout << "Índice: " << (currentTreeIndex + 1) << " de " << treeFiles.size() << endl;
+    cout << "Indice: " << (currentTreeIndex + 1) << " de " << treeFiles.size() << endl;
 }
 
-void updateTransformMatrix() {
-    // Matriz identidade
-    fill_n(transformMatrix, 16, 0.0f);
-    transformMatrix[0] = transformMatrix[5] = transformMatrix[10] = transformMatrix[15] = 1.0f;
+void updateCameraMatrices() {
+    // Calcula posição da câmera usando pitch e yaw
+    float x = camera.distance * cosf(radians(camera.pitch)) * sinf(radians(camera.yaw));
+    float y = camera.distance * sinf(radians(camera.pitch));
+    float z = camera.distance * cosf(radians(camera.pitch)) * cosf(radians(camera.yaw));
     
-    // Aplica rotação e escala
-    float cosR = cos(camera.rotation);
-    float sinR = sin(camera.rotation);
-    transformMatrix[0] = cosR * camera.scale;
-    transformMatrix[1] = -sinR * camera.scale;
-    transformMatrix[4] = sinR * camera.scale;
-    transformMatrix[5] = cosR * camera.scale;
+    camera.position = camera.target + vec3(x, y, z);
     
-    // Aplica translação
-    transformMatrix[12] = camera.translation[0];
-    transformMatrix[13] = camera.translation[1];
+    // Matrizes de transformação
+    mat4 view = lookAt(camera.position, camera.target, camera.up);
+    mat4 projection = perspective(radians(config.fov), 
+                                  (float)windowWidth / (float)windowHeight, 
+                                  0.1f, 100.0f);
+    mat4 model = identity();
+    
+    treeRenderer.setViewMatrix(view);
+    treeRenderer.setProjectionMatrix(projection);
+    treeRenderer.applyTransform(model);
 }
 
-void updateSmoothTransform(float deltaTime) {
+void updateSmoothCamera(float deltaTime) {
     // Interpolação suave usando LERP
     auto lerp = [](float current, float target, float factor, float deltaTime) {
         return current + (target - current) * factor * deltaTime;
     };
     
-    camera.translation[0] = lerp(camera.translation[0], camera.targetTranslation[0], 
-                                config.smoothFactor, deltaTime);
-    camera.translation[1] = lerp(camera.translation[1], camera.targetTranslation[1], 
-                                config.smoothFactor, deltaTime);
-    camera.rotation = lerp(camera.rotation, camera.targetRotation, 
-                          config.smoothFactor, deltaTime);
-    camera.scale = lerp(camera.scale, camera.targetScale, 
-                       config.smoothFactor, deltaTime);
+    camera.pitch = lerp(camera.pitch, camera.targetPitch, config.smoothFactor, deltaTime);
+    camera.yaw = lerp(camera.yaw, camera.targetYaw, config.smoothFactor, deltaTime);
+    camera.distance = lerp(camera.distance, camera.targetDistance, config.smoothFactor, deltaTime);
     
-    updateTransformMatrix();
+    // Limita distância da câmera
+    camera.distance = clamp(camera.distance, config.minDistance, config.maxDistance);
+    
+    updateCameraMatrices();
 }
 
 void resetCamera() {
-    camera.targetTranslation[0] = camera.targetTranslation[1] = 0.0f;
-    camera.targetScale = 1.0f;
-    camera.targetRotation = 0.0f;
-    cout << "Transformações resetadas" << endl;
-}
-
-inline void limitCameraValues() {
-    camera.targetTranslation[0] = clamp(camera.targetTranslation[0], 
-                                       -config.translationLimit, config.translationLimit);
-    camera.targetTranslation[1] = clamp(camera.targetTranslation[1], 
-                                       -config.translationLimit, config.translationLimit);
-    camera.targetScale = clamp(camera.targetScale, config.minScale, config.maxScale);
+    camera.targetPitch = -45.0f;
+    camera.targetYaw = 0.0f;
+    camera.targetDistance = 2.5f;
+    camera.target = vec3(0.0f, 0.0f, 0.0f);
+    cout << "Camera resetada" << endl;
 }
 
 // =============================================
@@ -229,6 +225,8 @@ inline void limitCameraValues() {
 // =============================================
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
+    windowWidth = width;
+    windowHeight = height;
     glViewport(0, 0, width, height);
 }
 
@@ -251,21 +249,22 @@ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos) {
     float deltaX = static_cast<float>(xpos - mouse.lastX) * config.dragSensitivity;
     float deltaY = static_cast<float>(mouse.lastY - ypos) * config.dragSensitivity;
     
-    // Compensa o zoom para movimento consistente
-    float zoomCompensation = 1.0f / camera.scale;
-    camera.targetTranslation[0] += deltaX * zoomCompensation;
-    camera.targetTranslation[1] += deltaY * zoomCompensation;
+    // Atualiza pitch e yaw (invertidos)
+    camera.targetYaw -= deltaX * 10.0f;
+    camera.targetPitch -= deltaY * 10.0f;
+    
+    // Limita pitch
+    camera.targetPitch = clamp(camera.targetPitch, -89.9f, 89.9f);
     
     mouse.lastX = xpos;
     mouse.lastY = ypos;
-    limitCameraValues();
 }
 
 void scroll_callback(GLFWwindow* window, double xoffset, double yoffset) {
     float zoomAmount = static_cast<float>(yoffset) * 0.1f * config.zoomSpeed;
-    camera.targetScale += zoomAmount;
-    limitCameraValues();
-    cout << "Zoom: " << camera.targetScale << endl;
+    camera.targetDistance -= zoomAmount;
+    camera.targetDistance = clamp(camera.targetDistance, config.minDistance, config.maxDistance);
+    cout << "Distância da câmera: " << camera.targetDistance << endl;
 }
 
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -312,7 +311,7 @@ void handleKeyPress(int key) {
                 treeRenderer.setColorMode(true);
                 treeRenderer.setGradientMode(false);
                 treeRenderer.setDescendantsColorMode(false);
-                cout << "Modo monocromático: ON (Verde)" << endl;
+                cout << "Modo monocromatico: ON (Verde)" << endl;
             } else if (monochromeMode && !gradientMode && !descendantsColorMode) {
                 // Segundo: Gradiente violeta-vermelho (profundidade)
                 monochromeMode = false;
@@ -358,45 +357,46 @@ void handleTreeNavigation(int direction) {
     }
     
     if (vtkLoader.loadFile(treeFiles[currentTreeIndex])) {
-        cout << "\n--- Nova Árvore Carregada ---" << endl;
+        cout << "\n--- Nova Arvore Carregada ---" << endl;
         printCurrentTreeInfo();
     }
 }
 
 void processInput(GLFWwindow* window) {
-    // Movimento com WASD
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) 
-        camera.targetTranslation[0] -= config.moveSpeed;
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) 
-        camera.targetTranslation[0] += config.moveSpeed;
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) 
-        camera.targetTranslation[1] += config.moveSpeed;
+    // Rotação com WASD (invertidos)
     if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) 
-        camera.targetTranslation[1] -= config.moveSpeed;
+        camera.targetPitch -= config.rotationSpeed;
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) 
+        camera.targetPitch += config.rotationSpeed;
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) 
+        camera.targetYaw += config.rotationSpeed;
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) 
+        camera.targetYaw -= config.rotationSpeed;
     
-    // Rotação com Q/E
+    // Zoom com Q/E
     if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) 
-        camera.targetRotation += config.rotationSpeed;
+        camera.targetDistance += config.moveSpeed;
     if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) 
-        camera.targetRotation -= config.rotationSpeed;
+        camera.targetDistance -= config.moveSpeed;
     
-    limitCameraValues();
+    // Limita valores
+    camera.targetPitch = clamp(camera.targetPitch, -89.9f, 89.9f);
+    camera.targetDistance = clamp(camera.targetDistance, config.minDistance, config.maxDistance);
 }
 
 void printControls() {
-    cout << "=== TP1 - Visualizador de Árvores Arteriais 2D ===" << endl;
+    cout << "=== TP2 - Visualizador de Arvores 3D ===" << endl;
     cout << "Controles:" << endl;
     cout << "ESC - Sair" << endl;
-    cout << "R - Resetar visualização" << endl;
-    cout << "WASD - Mover suavemente" << endl;
-    cout << "Clique e Arraste - Mover com mouse" << endl;
-    cout << "Q/E - Rotacionar suavemente" << endl;
+    cout << "R - Resetar camera" << endl;
+    cout << "WASD - Rotacionar camera (W/S rotacao vertical, A/D rotacao horizontal)" << endl;
+    cout << "Q/E - Aproximar/Afastar camera" << endl;
+    cout << "Clique e Arraste - Rotacionar camera com mouse" << endl;
     cout << "Scroll Mouse - Zoom suave" << endl;
-    //cout << "T - Alternar Wireframe" << endl;
     cout << "L - Alternar Linhas Adaptativas" << endl;
     cout << "C - Alternar Modo de Cor (Branco -> Verde -> Profundidade -> Descendentes)" << endl;
-    cout << "SETAS - Navegar entre árvores" << endl;
-    cout << "I - Mostrar informação da árvore atual" << endl;
+    cout << "SETAS - Navegar entre arvores" << endl;
+    cout << "I - Mostrar informacao da arvore atual" << endl;
     cout << endl;
 }
 
@@ -415,8 +415,8 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(1200, 800, 
-                                         "TP1 - Visualização de Árvores Arteriais 2D", 
+    GLFWwindow* window = glfwCreateWindow(windowWidth, windowHeight, 
+                                         "TP2 - Visualizacao de Arvores 3D", 
                                          NULL, NULL);
     if (!window) {
         cerr << "Falha ao criar janela GLFW" << endl;
@@ -456,10 +456,11 @@ int main() {
     glClearColor(config.backgroundColor[0], config.backgroundColor[1], 
                  config.backgroundColor[2], 1.0f);
     glEnable(GL_LINE_SMOOTH);
+    glEnable(GL_DEPTH_TEST);
     glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
     
     // Inicialização
-    updateTransformMatrix();
+    updateCameraMatrices();
     lastTime = chrono::steady_clock::now();
     printControls();
 
@@ -475,11 +476,10 @@ int main() {
         
         // Processamento
         processInput(window);
-        updateSmoothTransform(deltaTime);
+        updateSmoothCamera(deltaTime);
         
         // Renderização
-        glClear(GL_COLOR_BUFFER_BIT);
-        treeRenderer.applyTransform(transformMatrix);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         treeRenderer.render(vtkLoader.getSegments());
         
         glfwSwapBuffers(window);

@@ -12,7 +12,11 @@
 
 TreeRenderer::TreeRenderer() : shaderProgram(0), VAO(0), VBO(0), lineWidth(2.0f), 
                                useMonochrome(false), gradientMode(false), 
-                               thicknessMode(false), descendantsColorMode(false) {} // NOVO
+                               thicknessMode(false), descendantsColorMode(false) {
+    modelMatrix = identity();
+    viewMatrix = identity();
+    projMatrix = identity();
+}
 
 TreeRenderer::~TreeRenderer() {
     if (VAO) glDeleteVertexArrays(1, &VAO);
@@ -23,13 +27,17 @@ TreeRenderer::~TreeRenderer() {
 bool TreeRenderer::initialize() {
     const char* vertexShaderSource = R"(
         #version 330 core
-        layout (location = 0) in vec2 aPos;
+        layout (location = 0) in vec3 aPos;
         layout (location = 1) in vec3 aColor;
-        uniform mat4 transform;
+        
+        uniform mat4 projection;
+        uniform mat4 view;
+        uniform mat4 model;
+        
         out vec3 fragColor;
         
         void main() {
-            gl_Position = transform * vec4(aPos, 0.0, 1.0);
+            gl_Position = projection * view * model * vec4(aPos, 1.0);
             fragColor = aColor;
         }
     )";
@@ -53,14 +61,17 @@ bool TreeRenderer::initialize() {
     glBindVertexArray(VAO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+    // Position attribute (3D)
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(2 * sizeof(float)));
+    
+    // Color attribute
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
     
     glBindVertexArray(0);
     
-    std::cout << "TreeRenderer inicializado com sucesso" << std::endl;
+    std::cout << "TreeRenderer inicializado com sucesso para renderizacao 3D" << std::endl;
     return true;
 }
 
@@ -170,7 +181,7 @@ TreeRenderer::RenderData TreeRenderer::prepareRenderData(const std::vector<Segme
     if (maxDescendants == 0) maxDescendants = 1;
     
     // Prepara dados de renderização
-    data.vertices.reserve(segments.size() * 4);
+    data.vertices.reserve(segments.size() * 6);  // 3D: x, y, z para cada ponto
     data.colors.reserve(segments.size() * 6);
     data.thicknesses.reserve(segments.size());
     
@@ -207,15 +218,17 @@ TreeRenderer::RenderData TreeRenderer::prepareRenderData(const std::vector<Segme
             thickness = 2.0f + normalizedDescendants * 13.0f;
         }
         
-        // Adiciona vértices e cores
+        // Adiciona vértices 3D e cores
         data.vertices.push_back(segment.start.x);
         data.vertices.push_back(segment.start.y);
+        data.vertices.push_back(segment.start.z);
         data.colors.push_back(r);
         data.colors.push_back(g);
         data.colors.push_back(b);
         
         data.vertices.push_back(segment.end.x);
         data.vertices.push_back(segment.end.y);
+        data.vertices.push_back(segment.end.z);
         data.colors.push_back(r);
         data.colors.push_back(g);
         data.colors.push_back(b);
@@ -226,11 +239,21 @@ TreeRenderer::RenderData TreeRenderer::prepareRenderData(const std::vector<Segme
     return data;
 }
 
-void TreeRenderer::applyTransform(const float* transformMatrix) {
+void TreeRenderer::applyTransform(const mat4& modelMatrix) {
     glUseProgram(shaderProgram);
-    GLuint transformLoc = glGetUniformLocation(shaderProgram, "transform");
-    if (transformLoc != -1) {
-        glUniformMatrix4fv(transformLoc, 1, GL_FALSE, transformMatrix);
+    
+    GLuint modelLoc = glGetUniformLocation(shaderProgram, "model");
+    GLuint viewLoc = glGetUniformLocation(shaderProgram, "view");
+    GLuint projLoc = glGetUniformLocation(shaderProgram, "projection");
+    
+    if (modelLoc != -1) {
+        glUniformMatrix4fv(modelLoc, 1, GL_FALSE, value_ptr(modelMatrix));
+    }
+    if (viewLoc != -1) {
+        glUniformMatrix4fv(viewLoc, 1, GL_FALSE, value_ptr(viewMatrix));
+    }
+    if (projLoc != -1) {
+        glUniformMatrix4fv(projLoc, 1, GL_FALSE, value_ptr(projMatrix));
     }
 }
 
@@ -239,7 +262,7 @@ void TreeRenderer::render(const std::vector<Segment>& segments) {
     
     if (segments.empty()) {
         if (firstRender) {
-            std::cout << "Nenhuma árvore carregada, renderizando árvore de teste..." << std::endl;
+            std::cout << "Nenhuma arvore carregada, renderizando arvore de teste..." << std::endl;
             firstRender = false;
         }
         std::vector<Segment> testSegments = createTestTree();
@@ -248,7 +271,7 @@ void TreeRenderer::render(const std::vector<Segment>& segments) {
     }
     
     if (firstRender) {
-        std::cout << "Renderizando árvore com " << segments.size() << " segmentos" << std::endl;
+        std::cout << "Renderizando arvore com " << segments.size() << " segmentos" << std::endl;
         firstRender = false;
     }
     
@@ -259,21 +282,27 @@ std::vector<Segment> TreeRenderer::createTestTree() {
     std::vector<Segment> testSegments;
     
     // Tronco principal
-    testSegments.emplace_back(Point2D(0.0f, -1.0f), Point2D(0.0f, -0.5f), 0.1f, 0.08f);
+    testSegments.emplace_back(Point3D(0.0f, -1.0f, 0.0f), Point3D(0.0f, -0.5f, 0.0f), 0.1f, 0.08f);
     
     // Ramos primários
-    testSegments.emplace_back(Point2D(0.0f, -0.5f), Point2D(0.3f, -0.2f), 0.08f, 0.06f);
-    testSegments.emplace_back(Point2D(0.0f, -0.5f), Point2D(-0.3f, -0.2f), 0.08f, 0.06f);
+    testSegments.emplace_back(Point3D(0.0f, -0.5f, 0.0f), Point3D(0.3f, -0.2f, 0.0f), 0.08f, 0.06f);
+    testSegments.emplace_back(Point3D(0.0f, -0.5f, 0.0f), Point3D(-0.3f, -0.2f, 0.0f), 0.08f, 0.06f);
+    testSegments.emplace_back(Point3D(0.0f, -0.5f, 0.0f), Point3D(0.0f, -0.2f, 0.3f), 0.08f, 0.06f);
+    testSegments.emplace_back(Point3D(0.0f, -0.5f, 0.0f), Point3D(0.0f, -0.2f, -0.3f), 0.08f, 0.06f);
     
     // Ramos secundários
-    testSegments.emplace_back(Point2D(0.3f, -0.2f), Point2D(0.5f, 0.1f), 0.06f, 0.04f);
-    testSegments.emplace_back(Point2D(-0.3f, -0.2f), Point2D(-0.5f, 0.1f), 0.06f, 0.04f);
+    testSegments.emplace_back(Point3D(0.3f, -0.2f, 0.0f), Point3D(0.5f, 0.1f, 0.0f), 0.06f, 0.04f);
+    testSegments.emplace_back(Point3D(-0.3f, -0.2f, 0.0f), Point3D(-0.5f, 0.1f, 0.0f), 0.06f, 0.04f);
+    testSegments.emplace_back(Point3D(0.0f, -0.2f, 0.3f), Point3D(0.0f, 0.1f, 0.5f), 0.06f, 0.04f);
+    testSegments.emplace_back(Point3D(0.0f, -0.2f, -0.3f), Point3D(0.0f, 0.1f, -0.5f), 0.06f, 0.04f);
     
     // Ramos terciários
-    testSegments.emplace_back(Point2D(0.5f, 0.1f), Point2D(0.6f, 0.4f), 0.04f, 0.02f);
-    testSegments.emplace_back(Point2D(0.5f, 0.1f), Point2D(0.4f, 0.4f), 0.04f, 0.02f);
-    testSegments.emplace_back(Point2D(-0.5f, 0.1f), Point2D(-0.6f, 0.4f), 0.04f, 0.02f);
-    testSegments.emplace_back(Point2D(-0.5f, 0.1f), Point2D(-0.4f, 0.4f), 0.04f, 0.02f);
+    testSegments.emplace_back(Point3D(0.5f, 0.1f, 0.0f), Point3D(0.6f, 0.4f, 0.0f), 0.04f, 0.02f);
+    testSegments.emplace_back(Point3D(0.5f, 0.1f, 0.0f), Point3D(0.4f, 0.4f, 0.2f), 0.04f, 0.02f);
+    testSegments.emplace_back(Point3D(-0.5f, 0.1f, 0.0f), Point3D(-0.6f, 0.4f, 0.0f), 0.04f, 0.02f);
+    testSegments.emplace_back(Point3D(-0.5f, 0.1f, 0.0f), Point3D(-0.4f, 0.4f, 0.2f), 0.04f, 0.02f);
+    testSegments.emplace_back(Point3D(0.0f, 0.1f, 0.5f), Point3D(0.0f, 0.4f, 0.6f), 0.04f, 0.02f);
+    testSegments.emplace_back(Point3D(0.0f, 0.1f, -0.5f), Point3D(0.0f, 0.4f, -0.6f), 0.04f, 0.02f);
     
     return testSegments;
 }
@@ -292,10 +321,11 @@ void TreeRenderer::renderSegments(const std::vector<Segment>& segments) {
             std::vector<float> segmentData;
             size_t baseIdx = i * 2;
             
-            // Vértice inicial
+            // Vértice inicial (x, y, z, r, g, b)
             segmentData.insert(segmentData.end(), {
-                data.vertices[baseIdx * 2],
-                data.vertices[baseIdx * 2 + 1],
+                data.vertices[baseIdx * 3],
+                data.vertices[baseIdx * 3 + 1],
+                data.vertices[baseIdx * 3 + 2],
                 data.colors[baseIdx * 3],
                 data.colors[baseIdx * 3 + 1],
                 data.colors[baseIdx * 3 + 2]
@@ -303,8 +333,9 @@ void TreeRenderer::renderSegments(const std::vector<Segment>& segments) {
             
             // Vértice final
             segmentData.insert(segmentData.end(), {
-                data.vertices[(baseIdx + 1) * 2],
-                data.vertices[(baseIdx + 1) * 2 + 1],
+                data.vertices[(baseIdx + 1) * 3],
+                data.vertices[(baseIdx + 1) * 3 + 1],
+                data.vertices[(baseIdx + 1) * 3 + 2],
                 data.colors[(baseIdx + 1) * 3],
                 data.colors[(baseIdx + 1) * 3 + 1],
                 data.colors[(baseIdx + 1) * 3 + 2]
@@ -321,11 +352,12 @@ void TreeRenderer::renderSegments(const std::vector<Segment>& segments) {
         glLineWidth(lineWidth);
         
         std::vector<float> interleavedData;
-        interleavedData.reserve(data.vertices.size() / 2 * 5);
+        interleavedData.reserve(data.vertices.size() / 3 * 6);
         
-        for (size_t i = 0; i < data.vertices.size() / 2; i++) {
-            interleavedData.push_back(data.vertices[i * 2]);
-            interleavedData.push_back(data.vertices[i * 2 + 1]);
+        for (size_t i = 0; i < data.vertices.size() / 3; i++) {
+            interleavedData.push_back(data.vertices[i * 3]);
+            interleavedData.push_back(data.vertices[i * 3 + 1]);
+            interleavedData.push_back(data.vertices[i * 3 + 2]);
             interleavedData.push_back(data.colors[i * 3]);
             interleavedData.push_back(data.colors[i * 3 + 1]);
             interleavedData.push_back(data.colors[i * 3 + 2]);
@@ -335,7 +367,7 @@ void TreeRenderer::renderSegments(const std::vector<Segment>& segments) {
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
         glBufferData(GL_ARRAY_BUFFER, interleavedData.size() * sizeof(float), 
                     interleavedData.data(), GL_STATIC_DRAW);
-        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(data.vertices.size() / 2));
+        glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(data.vertices.size() / 3));
     }
     
     glBindVertexArray(0);
@@ -365,7 +397,7 @@ unsigned int TreeRenderer::createShaderProgram(const std::string& vertexSource, 
     unsigned int fragmentShader = compileShader(fragmentSource, GL_FRAGMENT_SHADER);
     
     if (!vertexShader || !fragmentShader) {
-        std::cerr << "Erro: Shaders não compilados corretamente" << std::endl;
+        std::cerr << "Erro: Shaders nao compilados corretamente" << std::endl;
         return 0;
     }
     

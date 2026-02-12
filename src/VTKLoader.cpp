@@ -21,9 +21,9 @@ bool VTKLoader::loadFile(const std::string& filename) {
         return true;
     }
     
-    std::cout << "[!] Arquivo não encontrado, gerando árvore procedural" << std::endl;
+    std::cout << "[!] Arquivo nao encontrado, gerando arvore procedural" << std::endl;
     generateProceduralTree();
-    std::cout << "[+] Árvore procedural: " << segments.size() << " segmentos" << std::endl;
+    std::cout << "[+] Arvore procedural: " << segments.size() << " segmentos" << std::endl;
     
     return true;
 }
@@ -35,7 +35,7 @@ bool VTKLoader::loadRealVTKFile(const std::string& filename) {
     }
 
     std::string line;
-    std::vector<Point2D> tempPoints;
+    std::vector<Point3D> tempPoints;
     std::vector<std::pair<int, int>> connections;
     std::vector<float> radii;
 
@@ -76,7 +76,7 @@ bool VTKLoader::loadRealVTKFile(const std::string& filename) {
         if (inPointsSection && pointsCount > 0) {
             float x, y, z;
             if (iss >> x >> y >> z) {
-                tempPoints.emplace_back(x, y);
+                tempPoints.emplace_back(x, y, z);
                 if (--pointsCount == 0) inPointsSection = false;
             }
         }
@@ -115,23 +115,28 @@ bool VTKLoader::loadRealVTKFile(const std::string& filename) {
 
     points = std::move(tempPoints);
     
-    // Normalização das coordenadas
+    // Normalização das coordenadas para 3D
     float minX = points[0].x, maxX = points[0].x;
     float minY = points[0].y, maxY = points[0].y;
+    float minZ = points[0].z, maxZ = points[0].z;
     
     for (const auto& p : points) {
         minX = std::min(minX, p.x);
         maxX = std::max(maxX, p.x);
         minY = std::min(minY, p.y);
         maxY = std::max(maxY, p.y);
+        minZ = std::min(minZ, p.z);
+        maxZ = std::max(maxZ, p.z);
     }
     
-    float scaleX = 2.0f / (maxX - minX);
-    float scaleY = 2.0f / (maxY - minY);
-    float scale = std::min(scaleX, scaleY) * 0.8f;
+    float scaleX = 2.0f / (maxX - minX + 0.0001f);
+    float scaleY = 2.0f / (maxY - minY + 0.0001f);
+    float scaleZ = 2.0f / (maxZ - minZ + 0.0001f);
+    float scale = std::min({scaleX, scaleY, scaleZ}) * 0.8f;
     
     float centerX = (minX + maxX) / 2.0f;
     float centerY = (minY + maxY) / 2.0f;
+    float centerZ = (minZ + maxZ) / 2.0f;
     
     segments.reserve(connections.size());
     
@@ -142,8 +147,11 @@ bool VTKLoader::loadRealVTKFile(const std::string& filename) {
         
         seg.start.x = (points[conn.first].x - centerX) * scale;
         seg.start.y = (points[conn.first].y - centerY) * scale;
+        seg.start.z = (points[conn.first].z - centerZ) * scale;
+        
         seg.end.x = (points[conn.second].x - centerX) * scale;
         seg.end.y = (points[conn.second].y - centerY) * scale;
+        seg.end.z = (points[conn.second].z - centerZ) * scale;
         
         if (conn.first < radii.size() && conn.second < radii.size()) {
             seg.startRadius = radii[conn.first] * scale * 0.5f;
@@ -167,17 +175,18 @@ void VTKLoader::generateProceduralTree() {
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> dist(-0.05f, 0.05f);
     
-    points.emplace_back(0.0f, -0.8f);
+    points.emplace_back(0.0f, -0.8f, 0.0f);
     
-    std::function<int(Point2D, Point2D, float, float, int, int)> generateBranch;
+    std::function<int(Point3D, Point3D, float, float, int, int)> generateBranch;
     
-    generateBranch = [&](Point2D start, Point2D direction, float length, 
+    generateBranch = [&](Point3D start, Point3D direction, float length, 
                          float startRadius, int depth, int parentPointIdx) -> int {
         if (depth <= 0 || length < 0.01f) return -1;
         
-        Point2D end;
+        Point3D end;
         end.x = start.x + direction.x * length + dist(rng);
         end.y = start.y + direction.y * length + dist(rng);
+        end.z = start.z + direction.z * length + dist(rng);
         
         int endPointIdx = static_cast<int>(points.size());
         points.push_back(end);
@@ -196,14 +205,24 @@ void VTKLoader::generateProceduralTree() {
             for (int i = 0; i < numBranches; i++) {
                 float angle = (i == 0) ? 0.5f : -0.5f;
                 
-                Point2D newDir;
-                newDir.x = direction.x * cos(angle) - direction.y * sin(angle);
-                newDir.y = direction.x * sin(angle) + direction.y * cos(angle);
+                Point3D newDir;
+                if (i == 0) {
+                    // Rotação em torno do eixo Y
+                    newDir.x = direction.x * cos(angle) - direction.z * sin(angle);
+                    newDir.y = direction.y;
+                    newDir.z = direction.x * sin(angle) + direction.z * cos(angle);
+                } else {
+                    // Rotação em torno do eixo X
+                    newDir.x = direction.x;
+                    newDir.y = direction.y * cos(angle) - direction.z * sin(angle);
+                    newDir.z = direction.y * sin(angle) + direction.z * cos(angle);
+                }
                 
-                float mag = sqrt(newDir.x * newDir.x + newDir.y * newDir.y);
+                float mag = sqrt(newDir.x * newDir.x + newDir.y * newDir.y + newDir.z * newDir.z);
                 if (mag > 0) {
                     newDir.x /= mag;
                     newDir.y /= mag;
+                    newDir.z /= mag;
                 }
                 
                 generateBranch(end, newDir, length * 0.6f, startRadius * 0.7f, 
@@ -214,12 +233,12 @@ void VTKLoader::generateProceduralTree() {
         return endPointIdx;
     };
     
-    // Gera árvore
-    generateBranch(points[0], Point2D(0.0f, 1.0f), 0.6f, 0.08f, 6, 0);
-    generateBranch(Point2D(0.0f, -0.6f), Point2D(0.8f, 0.4f), 0.3f, 0.04f, 4, 0);
-    generateBranch(Point2D(0.0f, -0.6f), Point2D(-0.8f, 0.4f), 0.3f, 0.04f, 4, 0);
-    generateBranch(Point2D(0.0f, -0.3f), Point2D(0.9f, 0.2f), 0.25f, 0.03f, 3, 0);
-    generateBranch(Point2D(0.0f, -0.3f), Point2D(-0.9f, 0.2f), 0.25f, 0.03f, 3, 0);
+    // Gera árvore em 3D
+    generateBranch(points[0], Point3D(0.0f, 1.0f, 0.0f), 0.6f, 0.08f, 6, 0);
+    generateBranch(Point3D(0.0f, -0.6f, 0.0f), Point3D(0.8f, 0.4f, 0.0f), 0.3f, 0.04f, 4, 0);
+    generateBranch(Point3D(0.0f, -0.6f, 0.0f), Point3D(-0.8f, 0.4f, 0.0f), 0.3f, 0.04f, 4, 0);
+    generateBranch(Point3D(0.0f, -0.3f, 0.0f), Point3D(0.0f, 0.2f, 0.9f), 0.25f, 0.03f, 3, 0);
+    generateBranch(Point3D(0.0f, -0.3f, 0.0f), Point3D(0.0f, 0.2f, -0.9f), 0.25f, 0.03f, 3, 0);
 }
 
 void VTKLoader::clear() {

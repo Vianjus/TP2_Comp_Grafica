@@ -4,17 +4,17 @@
 #include <vector>
 #include <string>
 
-struct Point2D {
-    float x, y;
-    Point2D(float x = 0.0f, float y = 0.0f) : x(x), y(y) {}
+struct Point3D {
+    float x, y, z;
+    Point3D(float x = 0.0f, float y = 0.0f, float z = 0.0f) : x(x), y(y), z(z) {}
 };
 
 struct Segment {
-    Point2D start, end;
+    Point3D start, end;
     float startRadius, endRadius;
     int parentIndex;
     
-    Segment(Point2D s = Point2D(), Point2D e = Point2D(), 
+    Segment(Point3D s = Point3D(), Point3D e = Point3D(), 
             float sr = 0.1f, float er = 0.05f, int parent = -1) 
         : start(s), end(e), startRadius(sr), endRadius(er), parentIndex(parent) {}
 };
@@ -26,12 +26,12 @@ public:
     void clear();
     
     const std::vector<Segment>& getSegments() const { return segments; }
-    const std::vector<Point2D>& getPoints() const { return points; }
+    const std::vector<Point3D>& getPoints() const { return points; }
     bool hasData() const { return !segments.empty(); }
     
 private:
     std::vector<Segment> segments;
-    std::vector<Point2D> points;
+    std::vector<Point3D> points;
     
     void generateProceduralTree();
     bool loadRealVTKFile(const std::string& filename);

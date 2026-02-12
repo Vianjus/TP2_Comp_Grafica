@@ -4,6 +4,7 @@
 #include "VTKLoader.h"
 #include <vector>
 #include <string>
+#include "glm.hpp"
 
 class TreeRenderer {
 public:
@@ -13,7 +14,9 @@ public:
     bool initialize();
     void render(const std::vector<Segment>& segments);
     void setLineWidth(float width) { lineWidth = width; }
-    void applyTransform(const float* transformMatrix);
+    void applyTransform(const mat4& modelMatrix);
+    void setViewMatrix(const mat4& viewMatrix) { this->viewMatrix = viewMatrix; }
+    void setProjectionMatrix(const mat4& projMatrix) { this->projMatrix = projMatrix; }
     void setColorMode(bool monochrome) { useMonochrome = monochrome; }
     void setGradientMode(bool enabled) { gradientMode = enabled; }
     void setThicknessMode(bool enabled) { thicknessMode = enabled; }
@@ -33,6 +36,10 @@ private:
     bool gradientMode;
     bool thicknessMode;
     bool descendantsColorMode;
+    
+    mat4 modelMatrix;
+    mat4 viewMatrix;
+    mat4 projMatrix;
     
     void calculateNodeInfo(const std::vector<Segment>& segments,
                           std::vector<int>& depth,

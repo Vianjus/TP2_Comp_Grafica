@@ -17,11 +17,12 @@ all: $(TARGET)
 # Regra para compilar o programa
 $(TARGET): $(SOURCES)
 	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SOURCES) $(LDFLAGS)
-	@echo "=== TP1 Compilado com Sucesso ==="
+	@copy "lib\GLFW\glfw3.dll" . > nul
+	@echo "=== TP2 Compilado com Sucesso ==="
 
 # Regra para executar
 run: $(TARGET)
-	@echo "=== Executando Visualizador de Arvores Arteriais ==="
+	@echo "=== Executando Visualizador de Arvores 3D ==="
 	@.\$(TARGET)
 
 # Regra para limpar
