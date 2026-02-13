@@ -34,7 +34,7 @@ struct CameraState {
 };
 
 struct AppConfig {
-    float backgroundColor[3] = {0.05f, 0.05f, 0.08f};
+    float backgroundColor[3] = {0.05f, 0.05f, 0.05f};
     float moveSpeed = 0.05f;
     float rotationSpeed = 0.02f;
     float zoomSpeed = 0.5f;
@@ -70,6 +70,7 @@ bool monochromeMode = false;
 bool gradientMode = false;
 bool thicknessMode = false;
 bool descendantsColorMode = false;
+bool cylinderMode = true;
 
 // Matrizes locais
 int windowWidth = 1200;
@@ -341,6 +342,11 @@ void handleKeyPress(int key) {
                 cout << "Modo de cor: OFF (Branco)" << endl;
             }
             break;
+        case GLFW_KEY_G:
+            cylinderMode = !cylinderMode;
+            treeRenderer.setCylinderMode(cylinderMode);
+            cout << "Modo de renderizacao: " << (cylinderMode ? "CILINDROS 3D" : "LINHAS") << endl;
+            break;
         case GLFW_KEY_I:
             printCurrentTreeInfo();
             break;
@@ -393,6 +399,7 @@ void printControls() {
     cout << "Q/E - Aproximar/Afastar camera" << endl;
     cout << "Clique e Arraste - Rotacionar camera com mouse" << endl;
     cout << "Scroll Mouse - Zoom suave" << endl;
+    cout << "G - Alternar Modo de Renderizacao (Cilindros 3D / Linhas)" << endl;
     cout << "L - Alternar Linhas Adaptativas" << endl;
     cout << "C - Alternar Modo de Cor (Branco -> Verde -> Profundidade -> Descendentes)" << endl;
     cout << "SETAS - Navegar entre arvores" << endl;

@@ -21,21 +21,32 @@ public:
     void setGradientMode(bool enabled) { gradientMode = enabled; }
     void setThicknessMode(bool enabled) { thicknessMode = enabled; }
     void setDescendantsColorMode(bool enabled) { descendantsColorMode = enabled; }
+    void setCylinderMode(bool enabled) { renderCylinders = enabled; }
     
 private:
     struct RenderData {
         std::vector<float> vertices;
         std::vector<float> colors;
         std::vector<float> thicknesses;
+        std::vector<float> normals;
+        std::vector<unsigned int> indices;
+    };
+    
+    struct CylinderGeometry {
+        std::vector<float> vertices;
+        std::vector<float> normals;
+        std::vector<unsigned int> indices;
+        int vertexCount;
     };
     
     unsigned int shaderProgram;
-    unsigned int VAO, VBO;
+    unsigned int VAO, VBO, EBO, normalVBO;
     float lineWidth;
     bool useMonochrome;
     bool gradientMode;
     bool thicknessMode;
     bool descendantsColorMode;
+    bool renderCylinders;
     
     mat4 modelMatrix;
     mat4 viewMatrix;
@@ -47,6 +58,17 @@ private:
     int findRootSegment(const std::vector<Segment>& segments);
     void buildAdjacencyList(const std::vector<Segment>& segments,
                           std::vector<std::vector<int>>& children);
+    
+    // Métodos para cilindros
+    CylinderGeometry generateCylinder(const Point3D& startPos, const Point3D& endPos,
+                                      float startRadius, float endRadius,
+                                      int segments = 16);
+    void buildCylinderMesh(const std::vector<Segment>& segments,
+                          std::vector<float>& vertices,
+                          std::vector<float>& normals,
+                          std::vector<float>& colors,
+                          std::vector<unsigned int>& indices);
+    void renderCylinderSegments(const std::vector<Segment>& segments);
     
     std::vector<Segment> createTestTree();
     void renderSegments(const std::vector<Segment>& segments);

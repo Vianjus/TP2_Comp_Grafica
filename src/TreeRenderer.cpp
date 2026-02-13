@@ -10,22 +10,86 @@
 #include <stack>
 #include <functional>
 
-TreeRenderer::TreeRenderer() : shaderProgram(0), VAO(0), VBO(0), lineWidth(2.0f), 
+TreeRenderer::TreeRenderer() : shaderProgram(0), VAO(0), VBO(0), EBO(0), normalVBO(0), lineWidth(2.0f), 
                                useMonochrome(false), gradientMode(false), 
-                               thicknessMode(false), descendantsColorMode(false) {
+                               thicknessMode(false), descendantsColorMode(false), renderCylinders(true) {
     modelMatrix = identity();
     viewMatrix = identity();
     projMatrix = identity();
 }
 
+// Helper functions para operações vetoriais
+namespace {
+    inline vec3 normalize_vec3(const vec3& v) {
+        float len = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+        if (len < 0.0001f) return v;
+        return vec3(v.x / len, v.y / len, v.z / len);
+    }
+    
+    inline vec3 cross_vec3(const vec3& a, const vec3& b) {
+        return vec3(
+            a.y * b.z - a.z * b.y,
+            a.z * b.x - a.x * b.z,
+            a.x * b.y - a.y * b.x
+        );
+    }
+}
+
 TreeRenderer::~TreeRenderer() {
     if (VAO) glDeleteVertexArrays(1, &VAO);
     if (VBO) glDeleteBuffers(1, &VBO);
+    if (EBO) glDeleteBuffers(1, &EBO);
+    if (normalVBO) glDeleteBuffers(1, &normalVBO);
     if (shaderProgram) glDeleteProgram(shaderProgram);
 }
 
 bool TreeRenderer::initialize() {
-    const char* vertexShaderSource = R"(
+    // Shader para cilindros (com normais)
+    const char* cylinderVertexShaderSource = R"(
+        #version 330 core
+        layout (location = 0) in vec3 aPos;
+        layout (location = 1) in vec3 aColor;
+        layout (location = 2) in vec3 aNormal;
+        
+        uniform mat4 projection;
+        uniform mat4 view;
+        uniform mat4 model;
+        
+        out vec3 fragColor;
+        out vec3 fragNormal;
+        out vec3 fragPos;
+        
+        void main() {
+            gl_Position = projection * view * model * vec4(aPos, 1.0);
+            fragColor = aColor;
+            fragPos = vec3(model * vec4(aPos, 1.0));
+            fragNormal = mat3(transpose(inverse(model))) * aNormal;
+        }
+    )";
+    
+    const char* cylinderFragmentShaderSource = R"(
+        #version 330 core
+        in vec3 fragColor;
+        in vec3 fragNormal;
+        in vec3 fragPos;
+        out vec4 FragColor;
+        
+        void main() {
+            // Simples iluminação Phong
+            vec3 norm = normalize(fragNormal);
+            vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
+            
+            float diff = max(dot(norm, lightDir), 0.0);
+            vec3 diffuse = diff * fragColor;
+            
+            vec3 ambient = vec3(0.3) * fragColor;
+            
+            FragColor = vec4(ambient + diffuse, 1.0);
+        }
+    )";
+    
+    // Shader para linhas (simples)
+    const char* lineVertexShaderSource = R"(
         #version 330 core
         layout (location = 0) in vec3 aPos;
         layout (location = 1) in vec3 aColor;
@@ -42,7 +106,7 @@ bool TreeRenderer::initialize() {
         }
     )";
     
-    const char* fragmentShaderSource = R"(
+    const char* lineFragmentShaderSource = R"(
         #version 330 core
         in vec3 fragColor;
         out vec4 FragColor;
@@ -52,27 +116,169 @@ bool TreeRenderer::initialize() {
         }
     )";
     
-    shaderProgram = createShaderProgram(vertexShaderSource, fragmentShaderSource);
+    shaderProgram = createShaderProgram(cylinderVertexShaderSource, cylinderFragmentShaderSource);
     if (!shaderProgram) return false;
     
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
+    glGenBuffers(1, &EBO);
+    glGenBuffers(1, &normalVBO);
     
     glBindVertexArray(VAO);
-    glBindBuffer(GL_ARRAY_BUFFER, VBO);
     
     // Position attribute (3D)
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
     
-    // Color attribute
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+    // Color attribute (usando outro buffer)
+    unsigned int colorVBO = 0;
+    glGenBuffers(1, &colorVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, colorVBO);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(1);
     
-    glBindVertexArray(0);
+    // Normal attribute
+    glBindBuffer(GL_ARRAY_BUFFER, normalVBO);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(2);
     
-    std::cout << "TreeRenderer inicializado com sucesso para renderizacao 3D" << std::endl;
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    
+    glBindVertexArray(0);
+    glDeleteBuffers(1, &colorVBO);
+    
+    std::cout << "TreeRenderer inicializado com renderizacao de cilindros 3D" << std::endl;
     return true;
+}
+
+TreeRenderer::CylinderGeometry TreeRenderer::generateCylinder(const Point3D& startPos, const Point3D& endPos,
+                                                              float startRadius, float endRadius,
+                                                              int numSegments) {
+    CylinderGeometry geometry;
+    
+    // Calcula direção e comprimento
+    vec3 direction = vec3(endPos.x - startPos.x, endPos.y - startPos.y, endPos.z - startPos.z);
+    float len = sqrt(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+    
+    if (len < 0.0001f) {
+        geometry.vertexCount = 0;
+        return geometry;
+    }
+    
+    direction = normalize_vec3(direction);
+    
+    // Calcula vetores perpendiculares
+    vec3 up = vec3(0.0f, 1.0f, 0.0f);
+    if (std::abs(direction.y) > 0.99f) {
+        up = vec3(1.0f, 0.0f, 0.0f);
+    }
+    
+    vec3 right = normalize_vec3(cross_vec3(direction, up));
+    vec3 actualUp = cross_vec3(right, direction);
+    
+    // Gera vértices do cilindro
+    float angleStep = 2.0f * 3.14159265f / numSegments;
+    
+    // Vértices da base (start)
+    for (int i = 0; i < numSegments; i++) {
+        float angle = i * angleStep;
+        float x = std::cos(angle);
+        float z = std::sin(angle);
+        
+        vec3 offset = right * x * startRadius + actualUp * z * startRadius;
+        vec3 vertex = vec3(startPos.x, startPos.y, startPos.z) + offset;
+        
+        geometry.vertices.push_back(vertex.x);
+        geometry.vertices.push_back(vertex.y);
+        geometry.vertices.push_back(vertex.z);
+        
+        // Normal radial
+        vec3 normal = normalize_vec3(right * x + actualUp * z);
+        geometry.normals.push_back(normal.x);
+        geometry.normals.push_back(normal.y);
+        geometry.normals.push_back(normal.z);
+    }
+    
+    // Vértices do topo (end)
+    for (int i = 0; i < numSegments; i++) {
+        float angle = i * angleStep;
+        float x = std::cos(angle);
+        float z = std::sin(angle);
+        
+        vec3 offset = right * x * endRadius + actualUp * z * endRadius;
+        vec3 vertex = vec3(endPos.x, endPos.y, endPos.z) + offset;
+        
+        geometry.vertices.push_back(vertex.x);
+        geometry.vertices.push_back(vertex.y);
+        geometry.vertices.push_back(vertex.z);
+        
+        // Normal radial
+        vec3 normal = normalize_vec3(right * x + actualUp * z);
+        geometry.normals.push_back(normal.x);
+        geometry.normals.push_back(normal.y);
+        geometry.normals.push_back(normal.z);
+    }
+    
+    // Gera índices para os triângulos (lado do cilindro)
+    for (int i = 0; i < numSegments; i++) {
+        int next = (i + 1) % numSegments;
+        
+        // Quadrado dividido em 2 triângulos
+        unsigned int base = i;
+        unsigned int baseNext = next;
+        unsigned int top = numSegments + i;
+        unsigned int topNext = numSegments + next;
+        
+        // Primeiro triângulo
+        geometry.indices.push_back(base);
+        geometry.indices.push_back(top);
+        geometry.indices.push_back(baseNext);
+        
+        // Segundo triângulo
+        geometry.indices.push_back(baseNext);
+        geometry.indices.push_back(top);
+        geometry.indices.push_back(topNext);
+    }
+    
+    // Gera bases (opcional - pode desabilitar para melhor performance)
+    // Base inferior
+    int baseStartIndex = numSegments * 2;
+    geometry.vertices.push_back(startPos.x);
+    geometry.vertices.push_back(startPos.y);
+    geometry.vertices.push_back(startPos.z);
+    geometry.normals.push_back(-direction.x);
+    geometry.normals.push_back(-direction.y);
+    geometry.normals.push_back(-direction.z);
+    int baseCenterIdx = baseStartIndex;
+    
+    for (int i = 0; i < numSegments; i++) {
+        int current = i;
+        int next = (i + 1) % numSegments;
+        geometry.indices.push_back(baseCenterIdx);
+        geometry.indices.push_back(next);
+        geometry.indices.push_back(current);
+    }
+    
+    // Base superior
+    geometry.vertices.push_back(endPos.x);
+    geometry.vertices.push_back(endPos.y);
+    geometry.vertices.push_back(endPos.z);
+    geometry.normals.push_back(direction.x);
+    geometry.normals.push_back(direction.y);
+    geometry.normals.push_back(direction.z);
+    int topCenterIdx = baseStartIndex + 1;
+    
+    for (int i = 0; i < numSegments; i++) {
+        int current = numSegments + i;
+        int next = numSegments + (i + 1) % numSegments;
+        geometry.indices.push_back(topCenterIdx);
+        geometry.indices.push_back(current);
+        geometry.indices.push_back(next);
+    }
+    
+    geometry.vertexCount = geometry.indices.size();
+    return geometry;
 }
 
 int TreeRenderer::findRootSegment(const std::vector<Segment>& segments) {
@@ -161,6 +367,144 @@ void TreeRenderer::calculateNodeInfo(const std::vector<Segment>& segments,
     };
     
     calculateDescendants(root);
+}
+
+void TreeRenderer::buildCylinderMesh(const std::vector<Segment>& segments,
+                                    std::vector<float>& vertices,
+                                    std::vector<float>& normals,
+                                    std::vector<float>& colors,
+                                    std::vector<unsigned int>& indices) {
+    vertices.clear();
+    normals.clear();
+    colors.clear();
+    indices.clear();
+    
+    // Calcula informações dos nós
+    std::vector<int> depth;
+    std::vector<int> descendantCount;
+    calculateNodeInfo(segments, depth, descendantCount);
+    
+    // Encontra valores máximos para normalização
+    int maxDepth = *std::max_element(depth.begin(), depth.end());
+    int maxDescendants = *std::max_element(descendantCount.begin(), descendantCount.end());
+    
+    if (maxDepth == 0) maxDepth = 1;
+    if (maxDescendants == 0) maxDescendants = 1;
+    
+    unsigned int currentVertexOffset = 0;
+    
+    for (size_t i = 0; i < segments.size(); i++) {
+        const auto& segment = segments[i];
+        
+        // Calcula cor
+        float normalizedDepth = static_cast<float>(depth[i]) / maxDepth;
+        float normalizedDescendants = static_cast<float>(descendantCount[i]) / maxDescendants;
+        
+        float r, g, b;
+        
+        if (useMonochrome) {
+            r = 0.0f;
+            g = 1.0f;
+            b = 0.0f;
+        } else if (gradientMode) {
+            // Gradiente bottom-up: Violeta (folhas) -> Vermelho (raiz)
+            r = 1.0f - normalizedDepth * 0.5f;
+            g = 0.0f;
+            b = normalizedDepth * 0.5f;
+        } else if (descendantsColorMode) {
+            // Gradiente por número de descendentes 
+            r = sqrt(normalizedDescendants);           
+            g = 0.0f;
+            b = 1.0f - normalizedDescendants * normalizedDescendants;    
+        } else {
+            r = g = b = 1.0f;
+        }
+        
+        // Gera cilindro para este segmento
+        float radiusStart = segment.startRadius * 0.3f;  // Reduz tamanho em 70%
+        float radiusEnd = segment.endRadius * 0.3f;
+        
+        // Suaviza transição: interpola mais linear ao invés de cônico agressivo
+        float avgRadius = (radiusStart + radiusEnd) * 0.5f;
+        radiusStart = avgRadius;
+        radiusEnd = avgRadius * 0.85f;  // Apenas 15% de redução
+        
+        // Se thicknessMode estiver ativo, modula os raios
+        if (thicknessMode) {
+            float scale = 1.0f + normalizedDescendants * 1.0f;  // Reduz escala de 2.0 para 1.0
+            radiusStart *= scale;
+            radiusEnd *= scale;
+        }
+        
+        // Usa número menor de segmentos para melhor performance
+        CylinderGeometry cylinder = generateCylinder(segment.start, segment.end,
+                                                    radiusStart, radiusEnd, 12);
+        
+        // Adiciona vértices e normals
+        for (size_t j = 0; j < cylinder.vertices.size(); j++) {
+            vertices.push_back(cylinder.vertices[j]);
+            normals.push_back(cylinder.normals[j]);
+        }
+        
+        // Adiciona cores
+        for (size_t j = 0; j < cylinder.vertices.size() / 3; j++) {
+            colors.push_back(r);
+            colors.push_back(g);
+            colors.push_back(b);
+        }
+        
+        // Adiciona índices com offset
+        for (unsigned int idx : cylinder.indices) {
+            indices.push_back(idx + currentVertexOffset);
+        }
+        
+        currentVertexOffset += cylinder.vertices.size() / 3;
+    }
+}
+
+void TreeRenderer::renderCylinderSegments(const std::vector<Segment>& segments) {
+    std::vector<float> vertices;
+    std::vector<float> normals;
+    std::vector<float> colors;
+    std::vector<unsigned int> indices;
+    
+    buildCylinderMesh(segments, vertices, normals, colors, indices);
+    
+    if (vertices.empty() || indices.empty()) return;
+    
+    glUseProgram(shaderProgram);
+    glBindVertexArray(VAO);
+    
+    // Upload vertices
+    glBindBuffer(GL_ARRAY_BUFFER, VBO);
+    glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(float), vertices.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(0);
+    
+    // Upload colors
+    unsigned int colorVBO;
+    glGenBuffers(1, &colorVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, colorVBO);
+    glBufferData(GL_ARRAY_BUFFER, colors.size() * sizeof(float), colors.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    
+    // Upload normals
+    glBindBuffer(GL_ARRAY_BUFFER, normalVBO);
+    glBufferData(GL_ARRAY_BUFFER, normals.size() * sizeof(float), normals.data(), GL_STATIC_DRAW);
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+    glEnableVertexAttribArray(2);
+    
+    // Upload indices
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(unsigned int), indices.data(), GL_STATIC_DRAW);
+    
+    // Draw
+    glDrawElements(GL_TRIANGLES, indices.size(), GL_UNSIGNED_INT, 0);
+    
+    // Cleanup
+    glDeleteBuffers(1, &colorVBO);
+    glBindVertexArray(0);
 }
 
 TreeRenderer::RenderData TreeRenderer::prepareRenderData(const std::vector<Segment>& segments) {
@@ -266,16 +610,29 @@ void TreeRenderer::render(const std::vector<Segment>& segments) {
             firstRender = false;
         }
         std::vector<Segment> testSegments = createTestTree();
-        renderSegments(testSegments);
+        if (renderCylinders) {
+            renderCylinderSegments(testSegments);
+        } else {
+            renderSegments(testSegments);
+        }
         return;
     }
     
     if (firstRender) {
-        std::cout << "Renderizando arvore com " << segments.size() << " segmentos" << std::endl;
+        std::cout << "Renderizando arvore com " << segments.size() << " segmentos";
+        if (renderCylinders) {
+            std::cout << " como cilindros 3D" << std::endl;
+        } else {
+            std::cout << std::endl;
+        }
         firstRender = false;
     }
     
-    renderSegments(segments);
+    if (renderCylinders) {
+        renderCylinderSegments(segments);
+    } else {
+        renderSegments(segments);
+    }
 }
 
 std::vector<Segment> TreeRenderer::createTestTree() {
@@ -312,6 +669,8 @@ void TreeRenderer::renderSegments(const std::vector<Segment>& segments) {
     
     if (data.vertices.empty()) return;
     
+    glUseProgram(shaderProgram);  // Reutiliza shader atual
+    
     if (thicknessMode && !data.thicknesses.empty()) {
         // Renderiza segmento por segmento com espessuras diferentes
         for (size_t i = 0; i < segments.size(); i++) {
@@ -345,6 +704,14 @@ void TreeRenderer::renderSegments(const std::vector<Segment>& segments) {
             glBindBuffer(GL_ARRAY_BUFFER, VBO);
             glBufferData(GL_ARRAY_BUFFER, segmentData.size() * sizeof(float), 
                         segmentData.data(), GL_STATIC_DRAW);
+            
+            // Config VAO para linhas (sem normais)
+            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3*sizeof(float)));
+            glEnableVertexAttribArray(1);
+            glDisableVertexAttribArray(2);  // Desabilita normais
+            
             glDrawArrays(GL_LINES, 0, 2);
         }
     } else {
@@ -367,6 +734,14 @@ void TreeRenderer::renderSegments(const std::vector<Segment>& segments) {
         glBindBuffer(GL_ARRAY_BUFFER, VBO);
         glBufferData(GL_ARRAY_BUFFER, interleavedData.size() * sizeof(float), 
                     interleavedData.data(), GL_STATIC_DRAW);
+        
+        // Config VAO para linhas (sem normais)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(3*sizeof(float)));
+        glEnableVertexAttribArray(1);
+        glDisableVertexAttribArray(2);  // Desabilita normais
+        
         glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(data.vertices.size() / 3));
     }
     
