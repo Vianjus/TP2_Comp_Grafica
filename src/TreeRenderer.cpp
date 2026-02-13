@@ -10,9 +10,11 @@
 #include <stack>
 #include <functional>
 
-TreeRenderer::TreeRenderer() : shaderProgram(0), VAO(0), VBO(0), EBO(0), normalVBO(0), lineWidth(2.0f), 
+TreeRenderer::TreeRenderer() : shaderProgram(0), shaderPhong(0), shaderGouraud(0), shaderFlat(0),
+                               VAO(0), VBO(0), EBO(0), normalVBO(0), lineWidth(2.0f), 
                                useMonochrome(false), gradientMode(false), 
-                               thicknessMode(false), descendantsColorMode(false), renderCylinders(true) {
+                               thicknessMode(false), descendantsColorMode(false), renderCylinders(true),
+                               currentLighting(LightingModel::PHONG) {
     modelMatrix = identity();
     viewMatrix = identity();
     projMatrix = identity();
@@ -40,12 +42,14 @@ TreeRenderer::~TreeRenderer() {
     if (VBO) glDeleteBuffers(1, &VBO);
     if (EBO) glDeleteBuffers(1, &EBO);
     if (normalVBO) glDeleteBuffers(1, &normalVBO);
-    if (shaderProgram) glDeleteProgram(shaderProgram);
+    if (shaderPhong) glDeleteProgram(shaderPhong);
+    if (shaderGouraud) glDeleteProgram(shaderGouraud);
+    if (shaderFlat) glDeleteProgram(shaderFlat);
 }
 
 bool TreeRenderer::initialize() {
-    // Shader para cilindros (com normais)
-    const char* cylinderVertexShaderSource = R"(
+    // ============ SHADER PHONG (Per-Fragment) ============
+    const char* phongVertexShaderSource = R"(
         #version 330 core
         layout (location = 0) in vec3 aPos;
         layout (location = 1) in vec3 aColor;
@@ -67,7 +71,7 @@ bool TreeRenderer::initialize() {
         }
     )";
     
-    const char* cylinderFragmentShaderSource = R"(
+    const char* phongFragmentShaderSource = R"(
         #version 330 core
         in vec3 fragColor;
         in vec3 fragNormal;
@@ -75,49 +79,130 @@ bool TreeRenderer::initialize() {
         out vec4 FragColor;
         
         void main() {
-            // Simples iluminação Phong
+            // Iluminação Phong: per-fragment
             vec3 norm = normalize(fragNormal);
             vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
             
+            // Componente ambiente
+            vec3 ambient = vec3(0.3) * fragColor;
+            
+            // Componente difusa
             float diff = max(dot(norm, lightDir), 0.0);
             vec3 diffuse = diff * fragColor;
             
-            vec3 ambient = vec3(0.3) * fragColor;
+            // Componente especular
+            vec3 viewDir = normalize(-fragPos);
+            vec3 reflectDir = reflect(-lightDir, norm);
+            float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
+            vec3 specular = vec3(0.5) * spec;
             
-            FragColor = vec4(ambient + diffuse, 1.0);
+            vec3 result = ambient + diffuse + specular;
+            FragColor = vec4(result, 1.0);
         }
     )";
     
-    // Shader para linhas (simples)
-    const char* lineVertexShaderSource = R"(
+    shaderPhong = createShaderProgram(phongVertexShaderSource, phongFragmentShaderSource);
+    if (!shaderPhong) return false;
+    
+    // ============ SHADER GOURAUD (Per-Vertex) ============
+    const char* gouraudVertexShaderSource = R"(
         #version 330 core
         layout (location = 0) in vec3 aPos;
         layout (location = 1) in vec3 aColor;
+        layout (location = 2) in vec3 aNormal;
+        
+        uniform mat4 projection;
+        uniform mat4 view;
+        uniform mat4 model;
+        
+        out vec3 vertexColor;
+        
+        void main() {
+            gl_Position = projection * view * model * vec4(aPos, 1.0);
+            
+            // Calcula iluminação NO VÉRTICE
+            vec3 norm = normalize(mat3(transpose(inverse(model))) * aNormal);
+            vec3 fragPos = vec3(model * vec4(aPos, 1.0));
+            vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
+            
+            // Ambiente
+            vec3 ambient = vec3(0.3) * aColor;
+            
+            // Difusa
+            float diff = max(dot(norm, lightDir), 0.0);
+            vec3 diffuse = diff * aColor;
+            
+            // Especular
+            vec3 viewDir = normalize(-fragPos);
+            vec3 reflectDir = reflect(-lightDir, norm);
+            float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0);
+            vec3 specular = vec3(0.5) * spec;
+            
+            vertexColor = ambient + diffuse + specular;
+        }
+    )";
+    
+    const char* gouraudFragmentShaderSource = R"(
+        #version 330 core
+        in vec3 vertexColor;
+        out vec4 FragColor;
+        
+        void main() {
+            // Apenas interpola a cor calculada no vértice
+            FragColor = vec4(vertexColor, 1.0);
+        }
+    )";
+    
+    shaderGouraud = createShaderProgram(gouraudVertexShaderSource, gouraudFragmentShaderSource);
+    if (!shaderGouraud) return false;
+    
+    // ============ SHADER FLAT (Flat Shading) ============
+    const char* flatVertexShaderSource = R"(
+        #version 330 core
+        layout (location = 0) in vec3 aPos;
+        layout (location = 1) in vec3 aColor;
+        layout (location = 2) in vec3 aNormal;
         
         uniform mat4 projection;
         uniform mat4 view;
         uniform mat4 model;
         
         out vec3 fragColor;
+        out vec3 fragNormal;
+        out vec3 fragPos;
         
         void main() {
             gl_Position = projection * view * model * vec4(aPos, 1.0);
             fragColor = aColor;
+            fragPos = vec3(model * vec4(aPos, 1.0));
+            fragNormal = mat3(transpose(inverse(model))) * aNormal;
         }
     )";
     
-    const char* lineFragmentShaderSource = R"(
+    const char* flatFragmentShaderSource = R"(
         #version 330 core
         in vec3 fragColor;
+        in vec3 fragNormal;
+        in vec3 fragPos;
         out vec4 FragColor;
         
         void main() {
-            FragColor = vec4(fragColor, 1.0);
+            // Flat shading: cores sólidas por face
+            vec3 norm = normalize(fragNormal);
+            vec3 lightDir = normalize(vec3(1.0, 1.0, 1.0));
+            
+            float diff = max(dot(norm, lightDir), 0.0);
+            vec3 diffuse = diff * fragColor * 0.8;
+            vec3 ambient = vec3(0.2) * fragColor;
+            
+            FragColor = vec4(ambient + diffuse, 1.0);
         }
     )";
     
-    shaderProgram = createShaderProgram(cylinderVertexShaderSource, cylinderFragmentShaderSource);
-    if (!shaderProgram) return false;
+    shaderFlat = createShaderProgram(flatVertexShaderSource, flatFragmentShaderSource);
+    if (!shaderFlat) return false;
+    
+    shaderProgram = shaderPhong;  // Padrão é Phong
     
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
@@ -148,7 +233,7 @@ bool TreeRenderer::initialize() {
     glBindVertexArray(0);
     glDeleteBuffers(1, &colorVBO);
     
-    std::cout << "TreeRenderer inicializado com renderizacao de cilindros 3D" << std::endl;
+    std::cout << "TreeRenderer inicializado com 3 modelos de iluminacao (Phong, Gouraud, Flat)" << std::endl;
     return true;
 }
 
@@ -581,6 +666,26 @@ TreeRenderer::RenderData TreeRenderer::prepareRenderData(const std::vector<Segme
     }
     
     return data;
+}
+
+void TreeRenderer::cycleLightingModel() {
+    switch (currentLighting) {
+        case LightingModel::PHONG:
+            currentLighting = LightingModel::GOURAUD;
+            shaderProgram = shaderGouraud;
+            std::cout << "Modo de iluminacao: GOURAUD (Per-Vertex)" << std::endl;
+            break;
+        case LightingModel::GOURAUD:
+            currentLighting = LightingModel::FLAT;
+            shaderProgram = shaderFlat;
+            std::cout << "Modo de iluminacao: FLAT (Flat Shading)" << std::endl;
+            break;
+        case LightingModel::FLAT:
+            currentLighting = LightingModel::PHONG;
+            shaderProgram = shaderPhong;
+            std::cout << "Modo de iluminacao: PHONG (Per-Fragment)" << std::endl;
+            break;
+    }
 }
 
 void TreeRenderer::applyTransform(const mat4& modelMatrix) {

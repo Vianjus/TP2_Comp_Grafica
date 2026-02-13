@@ -6,6 +6,13 @@
 #include <string>
 #include "glm.hpp"
 
+// Enumeração para modelos de iluminação
+enum class LightingModel {
+    PHONG,      // Per-fragment (mais realista)
+    GOURAUD,    // Per-vertex (interpolado)
+    FLAT        // Flat shading (facetas planas)
+};
+
 class TreeRenderer {
 public:
     TreeRenderer();
@@ -22,6 +29,8 @@ public:
     void setThicknessMode(bool enabled) { thicknessMode = enabled; }
     void setDescendantsColorMode(bool enabled) { descendantsColorMode = enabled; }
     void setCylinderMode(bool enabled) { renderCylinders = enabled; }
+    void setLightingModel(LightingModel model) { currentLighting = model; }
+    void cycleLightingModel();
     
 private:
     struct RenderData {
@@ -40,6 +49,9 @@ private:
     };
     
     unsigned int shaderProgram;
+    unsigned int shaderPhong;
+    unsigned int shaderGouraud;
+    unsigned int shaderFlat;
     unsigned int VAO, VBO, EBO, normalVBO;
     float lineWidth;
     bool useMonochrome;
@@ -47,6 +59,7 @@ private:
     bool thicknessMode;
     bool descendantsColorMode;
     bool renderCylinders;
+    LightingModel currentLighting;
     
     mat4 modelMatrix;
     mat4 viewMatrix;

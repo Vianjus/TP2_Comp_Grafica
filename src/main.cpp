@@ -347,6 +347,9 @@ void handleKeyPress(int key) {
             treeRenderer.setCylinderMode(cylinderMode);
             cout << "Modo de renderizacao: " << (cylinderMode ? "CILINDROS 3D" : "LINHAS") << endl;
             break;
+        case GLFW_KEY_H:
+            treeRenderer.cycleLightingModel();
+            break;
         case GLFW_KEY_I:
             printCurrentTreeInfo();
             break;
@@ -400,6 +403,7 @@ void printControls() {
     cout << "Clique e Arraste - Rotacionar camera com mouse" << endl;
     cout << "Scroll Mouse - Zoom suave" << endl;
     cout << "G - Alternar Modo de Renderizacao (Cilindros 3D / Linhas)" << endl;
+    cout << "H - Alternar Modelo de Iluminacao (Phong -> Gouraud -> Flat)" << endl;
     cout << "L - Alternar Linhas Adaptativas" << endl;
     cout << "C - Alternar Modo de Cor (Branco -> Verde -> Profundidade -> Descendentes)" << endl;
     cout << "SETAS - Navegar entre arvores" << endl;
