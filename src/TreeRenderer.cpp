@@ -11,7 +11,7 @@
 #include <functional>
 
 TreeRenderer::TreeRenderer() : shaderProgram(0), shaderPhong(0), shaderGouraud(0), shaderFlat(0),
-                               VAO(0), VBO(0), EBO(0), normalVBO(0), lineWidth(2.0f), 
+                               VAO(0), VBO(0), EBO(0), normalVBO(0), lineWidth(2.0f), opacity(1.0f),
                                useMonochrome(false), gradientMode(false), 
                                thicknessMode(false), descendantsColorMode(false), renderCylinders(true),
                                currentLighting(LightingModel::PHONG) {
@@ -78,6 +78,8 @@ bool TreeRenderer::initialize() {
         in vec3 fragPos;
         out vec4 FragColor;
         
+        uniform float alpha;
+        
         void main() {
             // Iluminação Phong: per-fragment
             vec3 norm = normalize(fragNormal);
@@ -97,7 +99,7 @@ bool TreeRenderer::initialize() {
             vec3 specular = vec3(0.5) * spec;
             
             vec3 result = ambient + diffuse + specular;
-            FragColor = vec4(result, 1.0);
+            FragColor = vec4(result, alpha);
         }
     )";
     
@@ -147,9 +149,11 @@ bool TreeRenderer::initialize() {
         in vec3 vertexColor;
         out vec4 FragColor;
         
+        uniform float alpha;
+        
         void main() {
             // Apenas interpola a cor calculada no vértice
-            FragColor = vec4(vertexColor, 1.0);
+            FragColor = vec4(vertexColor, alpha);
         }
     )";
     
@@ -186,6 +190,8 @@ bool TreeRenderer::initialize() {
         in vec3 fragPos;
         out vec4 FragColor;
         
+        uniform float alpha;
+        
         void main() {
             // Flat shading: cores sólidas por face
             vec3 norm = normalize(fragNormal);
@@ -195,7 +201,7 @@ bool TreeRenderer::initialize() {
             vec3 diffuse = diff * fragColor * 0.8;
             vec3 ambient = vec3(0.2) * fragColor;
             
-            FragColor = vec4(ambient + diffuse, 1.0);
+            FragColor = vec4(ambient + diffuse, alpha);
         }
     )";
     
@@ -694,6 +700,7 @@ void TreeRenderer::applyTransform(const mat4& modelMatrix) {
     GLuint modelLoc = glGetUniformLocation(shaderProgram, "model");
     GLuint viewLoc = glGetUniformLocation(shaderProgram, "view");
     GLuint projLoc = glGetUniformLocation(shaderProgram, "projection");
+    GLuint alphaLoc = glGetUniformLocation(shaderProgram, "alpha");
     
     if (modelLoc != -1) {
         glUniformMatrix4fv(modelLoc, 1, GL_FALSE, value_ptr(modelMatrix));
@@ -703,6 +710,9 @@ void TreeRenderer::applyTransform(const mat4& modelMatrix) {
     }
     if (projLoc != -1) {
         glUniformMatrix4fv(projLoc, 1, GL_FALSE, value_ptr(projMatrix));
+    }
+    if (alphaLoc != -1) {
+        glUniform1f(alphaLoc, opacity);
     }
 }
 

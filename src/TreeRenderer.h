@@ -4,6 +4,7 @@
 #include "VTKLoader.h"
 #include <vector>
 #include <string>
+#include <algorithm>
 #include "glm.hpp"
 
 // Enumeração para modelos de iluminação
@@ -29,6 +30,8 @@ public:
     void setThicknessMode(bool enabled) { thicknessMode = enabled; }
     void setDescendantsColorMode(bool enabled) { descendantsColorMode = enabled; }
     void setCylinderMode(bool enabled) { renderCylinders = enabled; }
+    void setOpacity(float alpha) { opacity = std::clamp(alpha, 0.0f, 1.0f); }
+    float getOpacity() const { return opacity; }
     void setLightingModel(LightingModel model) { currentLighting = model; }
     void cycleLightingModel();
     
@@ -54,6 +57,7 @@ private:
     unsigned int shaderFlat;
     unsigned int VAO, VBO, EBO, normalVBO;
     float lineWidth;
+    float opacity;
     bool useMonochrome;
     bool gradientMode;
     bool thicknessMode;

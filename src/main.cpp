@@ -71,6 +71,8 @@ bool gradientMode = false;
 bool thicknessMode = false;
 bool descendantsColorMode = false;
 bool cylinderMode = true;
+bool transparencyMode = false;
+float opacity = 1.0f;  // 0.0 = totalmente transparente, 1.0 = totalmente opaco
 
 // Matrizes locais
 int windowWidth = 1200;
@@ -353,6 +355,18 @@ void handleKeyPress(int key) {
         case GLFW_KEY_I:
             printCurrentTreeInfo();
             break;
+        case GLFW_KEY_Z:
+            // Diminuir opacidade
+            opacity = std::clamp(opacity - 0.05f, 0.0f, 1.0f);
+            treeRenderer.setOpacity(opacity);
+            cout << "Opacidade: " << (opacity * 100.0f) << "%" << endl;
+            break;
+        case GLFW_KEY_X:
+            // Aumentar opacidade
+            opacity = std::clamp(opacity + 0.05f, 0.0f, 1.0f);
+            treeRenderer.setOpacity(opacity);
+            cout << "Opacidade: " << (opacity * 100.0f) << "%" << endl;
+            break;
     }
 }
 
@@ -406,6 +420,7 @@ void printControls() {
     cout << "H - Alternar Modelo de Iluminacao (Phong -> Gouraud -> Flat)" << endl;
     cout << "L - Alternar Linhas Adaptativas" << endl;
     cout << "C - Alternar Modo de Cor (Branco -> Verde -> Profundidade -> Descendentes)" << endl;
+    cout << "Z/X - Diminuir/Aumentar Opacidade" << endl;
     cout << "SETAS - Navegar entre arvores" << endl;
     cout << "I - Mostrar informacao da arvore atual" << endl;
     cout << endl;
@@ -468,6 +483,9 @@ int main() {
                  config.backgroundColor[2], 1.0f);
     glEnable(GL_LINE_SMOOTH);
     glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
     
     // Inicialização
